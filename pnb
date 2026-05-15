@@ -1,40 +1,198 @@
--- ==========================================
--- CONFIG SETTINGS
--- ==========================================
+-- =============================================
+-- PNB PIXEL WORLDS - TANPA AUTO DROP
+-- =============================================
+local client = getClient()
+
+-- =============================================
+-- CONFIG
+-- =============================================
 local CONFIG = {
-    targetBlockId = 296,
-    worldName = "pus_mek-",
-    portalId = "kemem2",
-    itemType = InventoryItemType.block,
+    itemid        = 296,
+    spray_id      = 1924,
+    hits          = 5,
+    direction     = "down",
 
-    -- =====================================
-    -- PNB AREA SETTINGS
-    -- =====================================
-    pnbStandX = 32,
-    pnbStandY = 68,
+    hit_delay     = { min = 450, max = 690 },
+    place_delay   = { min = 500, max = 900 },
+    collect_delay = { min = 500, max = 900 },
 
-    pnbBreakX = 34,
-    pnbBreakStartY = 66,
-    pnbBreakEndY = 70,
-    -- =====================================
+    collect       = true,
+    log           = true,
 
-    -- =====================================
-    -- STORAGE SETTINGS
-    -- =====================================
-    storageWorld = "juiaja",
-    storagePortalId = "epidemic",
+    take_offset_x = -2,
+    take_offset_y = 0,
+}
 
-    storageDropX = 33,
-    storageDropY = 76,
+-- =============================================
+-- LOGGER
+-- =============================================
+local function log(msg)
+    if CONFIG.log then
+        print("[PNB] " .. tostring(msg))
+    end
+end
 
-    maxSeedToDrop = 10,
-    -- =====================================
+local function randSleep(tbl)
+    sleep(math.random(tbl.min, tbl.max))
+end
 
-    -- =====================================
-    -- WHITELIST (USERNAME)
-    -- =====================================
-    whitelist = {
-        "-",
+-- =============================================
+-- CEK WORLD
+-- =============================================
+local function isInWorld()
+    local ok, w = pcall(function() return client:world() end)
+    return ok and w ~= nil
+end
+
+-- =============================================
+-- TARGET TILE
+-- =============================================
+local function getTargetTile(pos, direction)
+    local x, y = pos.x, pos.y
+    if direction == "down"  then return Vector2i.new(x, y + 1) end
+    if direction == "up"    then return Vector2i.new(x, y - 1) end
+    if direction == "left"  then return Vector2i.new(x - 1, y) end
+    if direction == "right" then return Vector2i.new(x + 1, y) end
+    return Vector2i.new(x, y + 1)
+end
+
+-- =============================================
+-- HITUNG INVENTORY
+-- =============================================
+local function getCount(itemid, itemtype)
+    local ok, inv = pcall(function() return client:inventory() end)
+    if not ok or not inv then return 0 end
+    local total = 0
+    for _, item in pairs(inv.items) do
+        if item.id == itemid and item.type == itemtype then
+            total = total + item.amount
+        end
+    end
+    return total
+end
+
+local function getBlockCount()
+    return getCount(CONFIG.itemid, InventoryItemType.block)
+end
+
+-- =============================================
+-- CEK BLOCK DI TILE
+-- =============================================
+local function hasBlock(tilePoint)
+    local ok, world = pcall(function() return client:world() end)
+    if not ok or not world then return false end
+    local tile = world:tile(tilePoint)
+    return tile and tile.foreground and tile.foreground > 0
+end
+
+-- =============================================
+-- MOVE
+-- =============================================
+local function moveTo(x, y)
+    if not isInWorld() then return false end
+    client:setPoint(Vector2i.new(x, y), false)
+    sleep(math.random(600, 900))
+    return true
+end
+
+-- =============================================
+-- AUTO TAKE BLOCK
+-- =============================================
+local function takeBlocks(startPos)
+    if getBlockCount() > 0 then return end
+    if not isInWorld() then return end
+
+    local takeX = startPos.x + CONFIG.take_offset_x
+    local takeY = startPos.y + CONFIG.take_offset_y
+
+    log("Block habis, ambil block baru")
+    if not moveTo(takeX, takeY) then return end
+
+    client:collect(takeX, takeY)
+    sleep(1500)
+
+    log("Kembali ke PNB")
+    moveTo(startPos.x, startPos.y)
+end
+
+-- =============================================
+-- MAIN PNB
+-- =============================================
+local function pnb()
+    sleep(2000)
+
+    local startPos = client:point()
+    local tilePoint = getTargetTile(startPos, CONFIG.direction)
+    local totalUsed = 0
+
+    log("PNB Dimulai")
+
+    while true do
+        local ok, err = pcall(function()
+
+            if not isInWorld() then
+                log("Tidak di world, menunggu...")
+                sleep(2000)
+                return
+            end
+
+            -- Ambil block jika habis
+            takeBlocks(startPos)
+
+            if getBlockCount() <= 0 then
+                log("Block tidak tersedia")
+                sleep(2000)
+                return
+            end
+
+            -- Pecah block jika ada
+            if hasBlock(tilePoint) then
+                for i = 1, CONFIG.hits do
+                    if not isInWorld() then break end
+                    client:hit(tilePoint)
+                    log("Hit " .. i .. "/" .. CONFIG.hits)
+                    randSleep(CONFIG.hit_delay)
+                end
+
+                -- Collect drop
+                if CONFIG.collect then
+                    moveTo(tilePoint.x, tilePoint.y)
+                    randSleep(CONFIG.collect_delay)
+                    client:collect(tilePoint.x, tilePoint.y)
+                    log("Collect drop")
+                    randSleep(CONFIG.collect_delay)
+                    moveTo(startPos.x, startPos.y)
+                    randSleep(CONFIG.collect_delay)
+                end
+            end
+
+            -- Taruh block
+            local placeOk, placeErr = pcall(function()
+                client:place(tilePoint, CONFIG.itemid, InventoryItemType.block)
+            end)
+
+            if placeOk then
+                totalUsed = totalUsed + 1
+                log("Place #" .. totalUsed .. " | Sisa block: " .. getBlockCount())
+            else
+                log("Gagal place: " .. tostring(placeErr))
+            end
+
+            randSleep(CONFIG.place_delay)
+
+        end)
+
+        if not ok then
+            log("Error: " .. tostring(err))
+            sleep(1000)
+        end
+    end
+end
+
+-- =============================================
+-- START
+-- =============================================
+pnb()        "-",
         "-",
         "-"
     },
