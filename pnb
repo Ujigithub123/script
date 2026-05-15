@@ -1,5 +1,6 @@
 -- =============================================
--- PNB PIXEL WORLDS - TANPA AUTO DROP
+-- PNB PIXEL WORLDS
+-- AUTO WARP + AUTO RECONNECT + RANDOM TILE
 -- =============================================
 local client = getClient()
 
@@ -7,20 +8,30 @@ local client = getClient()
 -- CONFIG
 -- =============================================
 local CONFIG = {
-    itemid        = 296,
-    spray_id      = 1924,
-    hits          = 5,
-    direction     = "down",
+    itemid          = 296,
+    hits            = 5,
+    direction       = "down",
 
-    hit_delay     = { min = 450, max = 690 },
-    place_delay   = { min = 500, max = 900 },
-    collect_delay = { min = 500, max = 900 },
+    world_name      = "pus_mek-",
+    portal_id       = "kemem2",
 
-    collect       = true,
-    log           = true,
+    hit_delay       = { min = 450, max = 690 },
+    place_delay     = { min = 500, max = 900 },
+    collect_delay   = { min = 500, max = 900 },
+    warp_delay      = 5000,
+    reconnect_delay = 8000,
 
-    take_offset_x = -2,
-    take_offset_y = 0,
+    collect         = true,
+    log             = true,
+
+    -- X TETAP 32, Y RANDOM 68-73
+    pnb_x           = 32,
+    pnb_y_min       = 68,
+    pnb_y_max       = 73,
+
+    -- TAKE BLOCK POSISI TETAP
+    take_x          = 32,
+    take_y          = 66,
 }
 
 -- =============================================
@@ -44,16 +55,85 @@ local function isInWorld()
     return ok and w ~= nil
 end
 
+local function getWorldName()
+    local ok, w = pcall(function() return client:world() end)
+    if not ok or not w then return "" end
+    local ok2, name = pcall(function() return w:name() end)
+    if not ok2 then return "" end
+    return string.upper(name)
+end
+
 -- =============================================
--- TARGET TILE
+-- AUTO WARP
 -- =============================================
-local function getTargetTile(pos, direction)
-    local x, y = pos.x, pos.y
-    if direction == "down"  then return Vector2i.new(x, y + 1) end
-    if direction == "up"    then return Vector2i.new(x, y - 1) end
-    if direction == "left"  then return Vector2i.new(x - 1, y) end
-    if direction == "right" then return Vector2i.new(x + 1, y) end
-    return Vector2i.new(x, y + 1)
+local function warpToWorld()
+    local target = string.upper(CONFIG.world_name)
+
+    if getWorldName() == target then
+        log("Sudah di world " .. target)
+        return true
+    end
+
+    log("Warp ke world: " .. target .. " | Portal: " .. CONFIG.portal_id)
+
+    local ok, err = pcall(function()
+        client:warp(CONFIG.world_name, CONFIG.portal_id)
+    end)
+
+    if not ok then
+        log("Gagal warp: " .. tostring(err))
+        return false
+    end
+
+    sleep(CONFIG.warp_delay)
+
+    if getWorldName() == target then
+        log("Berhasil masuk world " .. target)
+        return true
+    end
+
+    log("Gagal masuk world, coba lagi...")
+    return false
+end
+
+-- =============================================
+-- AUTO RECONNECT
+-- =============================================
+local function autoReconnect()
+    log("Koneksi terputus, reconnect...")
+
+    local ok, err = pcall(function()
+        client:reconnect()
+    end)
+
+    if not ok then
+        log("Reconnect gagal: " .. tostring(err))
+    end
+
+    sleep(CONFIG.reconnect_delay)
+
+    local attempts = 0
+    while attempts < 5 do
+        attempts = attempts + 1
+        log("Warp ke PNB... percobaan " .. attempts)
+        if warpToWorld() then
+            log("Berhasil kembali ke world!")
+            return true
+        end
+        sleep(3000)
+    end
+
+    log("Gagal kembali setelah 5 percobaan")
+    return false
+end
+
+-- =============================================
+-- RANDOM POSISI PNB (Y RANDOM, X TETAP 32)
+-- =============================================
+local function getRandomPnbPos()
+    local randY = math.random(CONFIG.pnb_y_min, CONFIG.pnb_y_max)
+    log("Posisi PNB baru: X=" .. CONFIG.pnb_x .. " Y=" .. randY)
+    return CONFIG.pnb_x, randY
 end
 
 -- =============================================
@@ -96,23 +176,20 @@ local function moveTo(x, y)
 end
 
 -- =============================================
--- AUTO TAKE BLOCK
+-- AUTO TAKE BLOCK (POSISI TETAP X=32 Y=66)
 -- =============================================
-local function takeBlocks(startPos)
+local function takeBlocks(pnbX, pnbY)
     if getBlockCount() > 0 then return end
     if not isInWorld() then return end
 
-    local takeX = startPos.x + CONFIG.take_offset_x
-    local takeY = startPos.y + CONFIG.take_offset_y
+    log("Block habis, ambil dari X=" .. CONFIG.take_x .. " Y=" .. CONFIG.take_y)
+    if not moveTo(CONFIG.take_x, CONFIG.take_y) then return end
 
-    log("Block habis, ambil block baru")
-    if not moveTo(takeX, takeY) then return end
-
-    client:collect(takeX, takeY)
+    client:collect(CONFIG.take_x, CONFIG.take_y)
     sleep(1500)
 
-    log("Kembali ke PNB")
-    moveTo(startPos.x, startPos.y)
+    log("Kembali ke PNB X=" .. pnbX .. " Y=" .. pnbY)
+    moveTo(pnbX, pnbY)
 end
 
 -- =============================================
@@ -121,23 +198,70 @@ end
 local function pnb()
     sleep(2000)
 
-    local startPos = client:point()
-    local tilePoint = getTargetTile(startPos, CONFIG.direction)
-    local totalUsed = 0
+    log("Memulai, warp ke " .. CONFIG.world_name .. "...")
+    while not warpToWorld() do
+        log("Mencoba warp lagi...")
+        sleep(3000)
+    end
 
-    log("PNB Dimulai")
+    -- Random posisi awal
+    local pnbX, pnbY = getRandomPnbPos()
+    moveTo(pnbX, pnbY)
+    sleep(1000)
+
+    local tilePoint = Vector2i.new(pnbX, pnbY + 1)
+    local totalUsed = 0
+    local disconnectCount = 0
+    local cycleCount = 0
+    local randomInterval = math.random(5, 15)
+
+    log("PNB Dimulai | World: " .. CONFIG.world_name)
 
     while true do
         local ok, err = pcall(function()
 
+            -- Cek koneksi
             if not isInWorld() then
-                log("Tidak di world, menunggu...")
-                sleep(2000)
+                disconnectCount = disconnectCount + 1
+                log("Disconnect #" .. disconnectCount .. " | Reconnect...")
+                autoReconnect()
+                pnbX, pnbY = getRandomPnbPos()
+                moveTo(pnbX, pnbY)
+                sleep(1000)
+                tilePoint = Vector2i.new(pnbX, pnbY + 1)
+                cycleCount = 0
+                randomInterval = math.random(5, 15)
                 return
             end
 
-            -- Ambil block jika habis
-            takeBlocks(startPos)
+            -- Cek world benar
+            if getWorldName() ~= string.upper(CONFIG.world_name) then
+                log("Bukan di world PNB, warp balik...")
+                warpToWorld()
+                sleep(1000)
+                pnbX, pnbY = getRandomPnbPos()
+                moveTo(pnbX, pnbY)
+                sleep(1000)
+                tilePoint = Vector2i.new(pnbX, pnbY + 1)
+                cycleCount = 0
+                randomInterval = math.random(5, 15)
+                return
+            end
+
+            -- Ganti posisi tiap randomInterval siklus
+            cycleCount = cycleCount + 1
+            if cycleCount >= randomInterval then
+                pnbX, pnbY = getRandomPnbPos()
+                moveTo(pnbX, pnbY)
+                sleep(500)
+                tilePoint = Vector2i.new(pnbX, pnbY + 1)
+                cycleCount = 0
+                randomInterval = math.random(5, 15)
+                log("Pindah posisi | Interval berikutnya: " .. randomInterval .. " siklus")
+            end
+
+            -- Take block ke posisi tetap
+            takeBlocks(pnbX, pnbY)
 
             if getBlockCount() <= 0 then
                 log("Block tidak tersedia")
@@ -145,7 +269,7 @@ local function pnb()
                 return
             end
 
-            -- Pecah block jika ada
+            -- Pecah block
             if hasBlock(tilePoint) then
                 for i = 1, CONFIG.hits do
                     if not isInWorld() then break end
@@ -154,14 +278,13 @@ local function pnb()
                     randSleep(CONFIG.hit_delay)
                 end
 
-                -- Collect drop
                 if CONFIG.collect then
                     moveTo(tilePoint.x, tilePoint.y)
                     randSleep(CONFIG.collect_delay)
                     client:collect(tilePoint.x, tilePoint.y)
                     log("Collect drop")
                     randSleep(CONFIG.collect_delay)
-                    moveTo(startPos.x, startPos.y)
+                    moveTo(pnbX, pnbY)
                     randSleep(CONFIG.collect_delay)
                 end
             end
@@ -173,7 +296,10 @@ local function pnb()
 
             if placeOk then
                 totalUsed = totalUsed + 1
-                log("Place #" .. totalUsed .. " | Sisa block: " .. getBlockCount())
+                log("Place #" .. totalUsed ..
+                    " | Y=" .. pnbY ..
+                    " | Block: " .. getBlockCount() ..
+                    " | DC: " .. disconnectCount)
             else
                 log("Gagal place: " .. tostring(placeErr))
             end
