@@ -14,7 +14,11 @@ local CONFIG = {
     place_delay   = { min = 500, max = 900 },
     collect       = true,
     collect_delay = { min = 500, max = 900 },
-    log           = true
+    log           = true,
+
+    -- TAKE BLOCK
+    take_offset_x = -2,  -- kiri 2 tile
+    take_offset_y = 0,
 }
 -- ==================================
 
@@ -33,7 +37,7 @@ local function getTargetTile(pos, direction)
     return Vector2i.new(x, y + 1)
 end
 
--- Only count blocks, ignore seeds
+-- Hitung block saja, ignore seed
 local function getCount(itemid)
     local inv = client:inventory()
     local total = 0
@@ -45,7 +49,7 @@ local function getCount(itemid)
     return total
 end
 
--- Check if tile has a foreground block
+-- Cek tile ada block atau tidak
 local function hasBlock(tilePoint)
     local world = client:world()
     local tile = world:tile(tilePoint)
@@ -55,6 +59,35 @@ local function hasBlock(tilePoint)
     return false
 end
 
+-- =============================================
+-- AUTO TAKE BLOCK (KIRI 2 TILE)
+-- =============================================
+local function takeBlocks(startPos)
+    if getCount(CONFIG.itemid) > 0 then return end
+
+    local takeX = startPos.x + CONFIG.take_offset_x
+    local takeY = startPos.y + CONFIG.take_offset_y
+
+    log("Block habis! Ambil stock dari X=" .. takeX .. " Y=" .. takeY)
+
+    -- Jalan ke kiri 2 tile
+    client:setPoint(Vector2i.new(takeX, takeY), false)
+    sleep(math.random(600, 900))
+
+    -- Ambil block
+    client:collect(takeX, takeY)
+    sleep(1500)
+
+    log("Kembali ke posisi PNB | Block: " .. getCount(CONFIG.itemid))
+
+    -- Kembali ke posisi PNB
+    client:setPoint(startPos, false)
+    sleep(math.random(600, 900))
+end
+
+-- =============================================
+-- MAIN PNB
+-- =============================================
 local function pnb(itemid, hits, direction)
     itemid    = itemid    or CONFIG.itemid
     hits      = hits      or CONFIG.hits
@@ -69,10 +102,19 @@ local function pnb(itemid, hits, direction)
     log(string.format("Start pos: (%d,%d) | Target tile: (%d,%d)", startPos.x, startPos.y, tilePoint.x, tilePoint.y))
     log(string.format("Blocks in inventory: %d", getCount(itemid)))
 
-    while getCount(itemid) > 0 do
+    while true do
+
+        -- Ambil block jika habis
+        takeBlocks(startPos)
+
+        -- Cek lagi setelah ambil, jika masih kosong tunggu
+        if getCount(itemid) <= 0 then
+            log("Block masih kosong, menunggu...")
+            sleep(2000)
+            goto continue
+        end
 
         if hasBlock(tilePoint) then
-            -- Tile has a block, hit it
             log("Block detected, hitting...")
             for i = 1, hits do
                 client:hit(tilePoint)
@@ -81,7 +123,6 @@ local function pnb(itemid, hits, direction)
             end
 
             if CONFIG.collect then
-                -- Move to tile to collect drops
                 client:setPoint(tilePoint, false)
                 sleep(math.random(CONFIG.collect_delay.min, CONFIG.collect_delay.max))
 
@@ -89,24 +130,22 @@ local function pnb(itemid, hits, direction)
                 log("Collected drops")
                 sleep(math.random(CONFIG.collect_delay.min, CONFIG.collect_delay.max))
 
-                -- Return to start position
                 client:setPoint(startPos, false)
                 sleep(math.random(CONFIG.collect_delay.min, CONFIG.collect_delay.max))
             end
         else
-            -- Tile is empty, skip hitting
             log("Tile empty, skipping hit...")
         end
 
-        -- Place block
+        -- Taruh block
         client:place(tilePoint, itemid, InventoryItemType.block)
         totalUsed = totalUsed + 1
         log(string.format("Placed #%d | Remaining: %d", totalUsed, getCount(itemid)))
 
         sleep(math.random(CONFIG.place_delay.min, CONFIG.place_delay.max))
-    end
 
-    log(string.format("PNB done! Total placed: %d", totalUsed))
+        ::continue::
+    end
 end
 
 pnb(CONFIG.itemid, CONFIG.hits, CONFIG.direction)
