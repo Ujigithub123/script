@@ -1,542 +1,517 @@
--- =============================================
--- PNB DUAL BOT - 1 SCRIPT
--- Bot 1: Y=68 X=32 | Bot 2: Y=69 X=32
--- =============================================
+-- ==========================================
+-- CONFIG SETTINGS
+-- ==========================================
+local CONFIG = {
+    targetBlockId = 296,
+    worldName = "pus_mek-",
+    portalId = "kemem2",
+    itemType = InventoryItemType.block,
 
--- Deteksi client otomatis
-local c1, c2
+    -- =====================================
+    -- PNB AREA SETTINGS
+    -- =====================================
+    pnbStandX = 32,
+    pnbStandY = 68,
 
-local ok, clients = pcall(function() return getClients() end)
-if ok and clients and clients[1] and clients[2] then
-    c1 = clients[1]
-    c2 = clients[2]
-    print("[SYSTEM] getClients() berhasil")
-else
-    -- Fallback jika getClients() tidak ada
-    local ok1, cl1 = pcall(function() return getClient(0) end)
-    local ok2, cl2 = pcall(function() return getClient(1) end)
-    if ok1 and cl1 then c1 = cl1 end
-    if ok2 and cl2 then c2 = cl2 end
-    print("[SYSTEM] Fallback ke getClient(0) dan getClient(1)")
-end
+    pnbBreakX = 34,
+    pnbBreakStartY = 66,
+    pnbBreakEndY = 70,
+    -- =====================================
 
--- Cek apakah kedua client tersedia
-if not c1 then
-    print("[ERROR] Client 1 tidak ditemukan!")
-    return
-end
+    -- =====================================
+    -- STORAGE SETTINGS
+    -- =====================================
+    storageWorld = "juiaja",
+    storagePortalId = "epidemic",
 
-if not c2 then
-    print("[SYSTEM] Client 2 tidak ditemukan, jalankan Bot 1 saja")
-end
+    storageDropX = 33,
+    storageDropY = 76,
 
--- =============================================
--- CONFIG
--- =============================================
-local BOTS = {}
+    maxSeedToDrop = 10,
+    -- =====================================
 
-BOTS[1] = {
-    name          = "BOT1",
-    client        = c1,
-    itemid        = 296,
-    hits          = 5,
+    -- =====================================
+    -- WHITELIST (USERNAME)
+    -- =====================================
+    whitelist = {
+        "-",
+        "-",
+        "-"
+    },
+    -- =====================================
 
-    hit_delay     = { min = 450, max = 690 },
-    place_delay   = { min = 500, max = 900 },
-    collect_delay = { min = 500, max = 900 },
-    drop_delay    = { min = 900, max = 1500 },
+    delays = {
+        warp = 5000,
+        place = 150,
+        beforeHit = 150,
+        hit = 150,
 
-    collect       = true,
-    max_stack     = 75,
-    drop_batch    = 30,
-    max_drop_loop = 3,
-
-    pnb_x  = 32,
-    pnb_y  = 68,
-    drop_x = 32,
-    drop_y = 72,
-    take_x = 32,
-    take_y = 66,
-
-    start_delay = 2,
+        collectSync = 1000,
+        collectMove = 1000,
+        returnStand = 1000,
+        checkPlayer = 3000,
+        pathfinding = 150
+    }
 }
 
-if c2 then
-    BOTS[2] = {
-        name          = "BOT2",
-        client        = c2,
-        itemid        = 296,
-        hits          = 5,
+local client = getClient()
 
-        hit_delay     = { min = 500, max = 750 },
-        place_delay   = { min = 550, max = 950 },
-        collect_delay = { min = 550, max = 950 },
-        drop_delay    = { min = 1000, max = 1600 },
-
-        collect       = true,
-        max_stack     = 75,
-        drop_batch    = 30,
-        max_drop_loop = 3,
-
-        pnb_x  = 32,
-        pnb_y  = 69,
-        drop_x = 32,
-        drop_y = 72,
-        take_x = 32,
-        take_y = 66,
-
-        start_delay = 4,
-    }
+local function getItemCount()
+    return client:inventory():count(CONFIG.targetBlockId, CONFIG.itemType)
 end
 
--- =============================================
--- FUNGSI UMUM
--- =============================================
-local function log(name, msg)
-    print("[" .. name .. "] " .. tostring(msg))
+local function getSeedCount()
+    return client:inventory():count(CONFIG.targetBlockId, InventoryItemType.seed)
 end
 
-local function randSleep(tbl)
-    sleep(math.random(tbl.min, tbl.max))
-end
+local function hasTargetBlock(pt)
+    local world = client:world()
+    if not world then return false end
 
-local function isInWorld(c)
-    local ok, w = pcall(function() return c:world() end)
-    return ok and w ~= nil
-end
+    local tileData = world:tile(pt)
+    if not tileData then return false end
 
-local function getCount(c, itemid, itemtype)
-    local ok, inv = pcall(function() return c:inventory() end)
-    if not ok or not inv then return 0 end
-    local total = 0
-    for _, item in pairs(inv.items) do
-        if item.id == itemid and item.type == itemtype then
-            total = total + item.amount
-        end
-    end
-    return total
-end
-
-local function hasBlock(c, tilePoint)
-    local ok, world = pcall(function() return c:world() end)
-    if not ok or not world then return false end
-    local tile = world:tile(tilePoint)
-    return tile and tile.foreground and tile.foreground > 0
-end
-
-local function moveTo(cfg, x, y)
-    if not isInWorld(cfg.client) then
-        log(cfg.name, "Tidak di world, skip gerak")
-        return false
-    end
-    cfg.client:setPoint(Vector2i.new(x, y), false)
-    sleep(math.random(600, 900))
-    return true
-end
-
--- =============================================
--- AUTO DROP
--- =============================================
-local function autoDrop(cfg)
-    local seedCount = getCount(cfg.client, cfg.itemid, InventoryItemType.seed)
-    if seedCount < cfg.max_stack then return end
-
-    if not isInWorld(cfg.client) then return end
-
-    log(cfg.name, "Drop seed ke Y=" .. cfg.drop_y .. " X=" .. cfg.drop_x)
-    if not moveTo(cfg, cfg.drop_x, cfg.drop_y) then return end
-    sleep(math.random(400, 700))
-
-    local dropped = 0
-    local loopCount = 0
-
-    while loopCount < cfg.max_drop_loop do
-        local current = getCount(cfg.client, cfg.itemid, InventoryItemType.seed)
-        if current < cfg.max_stack then
-            log(cfg.name, "Seed aman: " .. current)
-            break
-        end
-
-        local amount = math.min(cfg.drop_batch, current)
-        local before = current
-
-        local ok, err = pcall(function()
-            cfg.client:drop(cfg.drop_x, cfg.drop_y, cfg.itemid, amount, InventoryItemType.seed)
-        end)
-
-        if not ok then
-            log(cfg.name, "Gagal drop: " .. tostring(err))
-            break
-        end
-
-        loopCount = loopCount + 1
-        dropped = dropped + amount
-        log(cfg.name, "Drop " .. amount .. " | Total: " .. dropped .. " | Loop: " .. loopCount)
-
-        sleep(math.random(1000, 1500))
-
-        local after = getCount(cfg.client, cfg.itemid, InventoryItemType.seed)
-        if after >= before then
-            log(cfg.name, "Seed tidak berkurang, stop")
-            break
-        end
-
-        if not isInWorld(cfg.client) then return end
-        randSleep(cfg.drop_delay)
+    if CONFIG.itemType == InventoryItemType.block then
+        return tileData.foreground == CONFIG.targetBlockId
+    elseif CONFIG.itemType == InventoryItemType.background then
+        return tileData.background == CONFIG.targetBlockId
     end
 
-    log(cfg.name, "Selesai drop | Kembali PNB")
-    sleep(math.random(400, 600))
-    moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
-end
-
--- =============================================
--- AUTO TAKE BLOCK
--- =============================================
-local function takeBlocks(cfg)
-    if getCount(cfg.client, cfg.itemid, InventoryItemType.block) > 0 then return end
-    if not isInWorld(cfg.client) then return end
-
-    log(cfg.name, "Block habis, ambil dari Y=" .. cfg.take_y)
-    if not moveTo(cfg, cfg.take_x, cfg.take_y) then return end
-
-    cfg.client:collect(cfg.take_x, cfg.take_y)
-    sleep(1500)
-
-    moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
-end
-
--- =============================================
--- STATE PER BOT
--- =============================================
-local states = {}
-
-local function initBot(cfg)
-    states[cfg.name] = {
-        tilePoint  = Vector2i.new(cfg.pnb_x, cfg.pnb_y + 1),
-        totalUsed  = 0,
-        ready      = false,
-        startTime  = os.clock(),
-    }
-    log(cfg.name, "Inisialisasi selesai")
-end
-
--- =============================================
--- STEP BOT (1 SIKLUS)
--- =============================================
-local function stepBot(cfg)
-    local s = states[cfg.name]
-    if not s then return end
-
-    -- Tunggu start delay
-    if not s.ready then
-        if os.clock() - s.startTime >= cfg.start_delay then
-            log(cfg.name, "Mulai! Posisi Y=" .. cfg.pnb_y .. " X=" .. cfg.pnb_x)
-            moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
-            s.ready = true
-        end
-        return
-    end
-
-    -- Proteksi penuh dengan pcall agar tidak berhenti
-    local ok, err = pcall(function()
-
-        if not isInWorld(cfg.client) then
-            log(cfg.name, "Tidak di world...")
-            sleep(2000)
-            return
-        end
-
-        takeBlocks(cfg)
-
-        if getCount(cfg.client, cfg.itemid, InventoryItemType.block) <= 0 then
-            log(cfg.name, "Block kosong")
-            sleep(1000)
-            return
-        end
-
-        if hasBlock(cfg.client, s.tilePoint) then
-            for i = 1, cfg.hits do
-                if not isInWorld(cfg.client) then break end
-                cfg.client:hit(s.tilePoint)
-                log(cfg.name, "Hit " .. i .. "/" .. cfg.hits)
-                randSleep(cfg.hit_delay)
-            end
-
-            if cfg.collect then
-                moveTo(cfg, s.tilePoint.x, s.tilePoint.y)
-                randSleep(cfg.collect_delay)
-                cfg.client:collect(s.tilePoint.x, s.tilePoint.y)
-                log(cfg.name, "Collect")
-                randSleep(cfg.collect_delay)
-                moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
-                randSleep(cfg.collect_delay)
-            end
-        end
-
-        autoDrop(cfg)
-
-        local placeOk, placeErr = pcall(function()
-            cfg.client:place(s.tilePoint, cfg.itemid, InventoryItemType.block)
-        end)
-
-        if placeOk then
-            s.totalUsed = s.totalUsed + 1
-            log(cfg.name, "Place #" .. s.totalUsed ..
-                " | Block: " .. getCount(cfg.client, cfg.itemid, InventoryItemType.block) ..
-                " | Seed: " .. getCount(cfg.client, cfg.itemid, InventoryItemType.seed))
-        else
-            log(cfg.name, "Gagal place: " .. tostring(placeErr))
-        end
-
-        randSleep(cfg.place_delay)
-
-    end)
-
-    -- Jika ada error tidak terduga, log dan lanjut
-    if not ok then
-        log(cfg.name, "Error tidak terduga: " .. tostring(err))
-        sleep(1000)
-    end
-end
-
--- =============================================
--- START SEMUA BOT
--- =============================================
-print("[SYSTEM] Inisialisasi bot...")
-
-for _, cfg in ipairs(BOTS) do
-    initBot(cfg)
-end
-
-print("[SYSTEM] Semua bot siap, mulai loop utama")
-
--- Loop utama tidak akan berhenti
-while true do
-    local allOk, loopErr = pcall(function()
-        for _, cfg in ipairs(BOTS) do
-            stepBot(cfg)
-        end
-    end)
-
-    if not allOk then
-        print("[SYSTEM] Error loop: " .. tostring(loopErr))
-        sleep(1000)
-    end
-
-    sleep(10)
-end    end)
-
-    if not ok then
-        log("Reconnect gagal: " .. tostring(err))
-    end
-
-    sleep(CONFIG.reconnect_delay)
-
-    local attempts = 0
-    while attempts < 5 do
-        attempts = attempts + 1
-        log("Warp ke PNB... percobaan " .. attempts)
-        if warpToWorld() then
-            log("Berhasil kembali ke world!")
-            return true
-        end
-        sleep(3000)
-    end
-
-    log("Gagal kembali setelah 5 percobaan")
     return false
 end
 
--- =============================================
--- RANDOM POSISI PNB (Y RANDOM, X TETAP 32)
--- =============================================
-local function getRandomPnbPos()
-    local randY = math.random(CONFIG.pnb_y_min, CONFIG.pnb_y_max)
-    log("Posisi PNB baru: X=" .. CONFIG.pnb_x .. " Y=" .. randY)
-    return CONFIG.pnb_x, randY
-end
+local function isTimeToCollect()
+    local world = client:world()
+    if not world or not world.collectables then
+        return false
+    end
 
--- =============================================
--- HITUNG INVENTORY
--- =============================================
-local function getCount(itemid, itemtype)
-    local ok, inv = pcall(function() return client:inventory() end)
-    if not ok or not inv then return 0 end
-    local total = 0
-    for _, item in pairs(inv.items) do
-        if item.id == itemid and item.type == itemtype then
-            total = total + item.amount
+    local dropCounts = {}
+
+    for _, drop in pairs(world.collectables) do
+        local pt = drop:point()
+
+        if pt.x == CONFIG.pnbBreakX
+        and pt.y >= CONFIG.pnbBreakStartY
+        and pt.y <= CONFIG.pnbBreakEndY then
+
+            local key = pt.x .. "," .. pt.y
+
+            dropCounts[key] = (dropCounts[key] or 0) + drop.amount
+
+            if dropCounts[key] >= 30 then
+                client:console():add("[PNB] Stack detected, collecting...")
+                return true
+            end
         end
     end
-    return total
+
+    return false
 end
 
-local function getBlockCount()
-    return getCount(CONFIG.itemid, InventoryItemType.block)
-end
+-- ==========================================
+-- RECONNECT
+-- ==========================================
+local function waitReconnect()
+    client:console():add("[SYSTEM] Waiting reconnect...")
 
--- =============================================
--- CEK BLOCK DI TILE
--- =============================================
-local function hasBlock(tilePoint)
-    local ok, world = pcall(function() return client:world() end)
-    if not ok or not world then return false end
-    local tile = world:tile(tilePoint)
-    return tile and tile.foreground and tile.foreground > 0
-end
-
--- =============================================
--- MOVE
--- =============================================
-local function moveTo(x, y)
-    if not isInWorld() then return false end
-    client:setPoint(Vector2i.new(x, y), false)
-    sleep(math.random(600, 900))
-    return true
-end
-
--- =============================================
--- AUTO TAKE BLOCK (POSISI TETAP X=32 Y=66)
--- =============================================
-local function takeBlocks(pnbX, pnbY)
-    if getBlockCount() > 0 then return end
-    if not isInWorld() then return end
-
-    log("Block habis, ambil dari X=" .. CONFIG.take_x .. " Y=" .. CONFIG.take_y)
-    if not moveTo(CONFIG.take_x, CONFIG.take_y) then return end
-
-    client:collect(CONFIG.take_x, CONFIG.take_y)
-    sleep(1500)
-
-    log("Kembali ke PNB X=" .. pnbX .. " Y=" .. pnbY)
-    moveTo(pnbX, pnbY)
-end
-
--- =============================================
--- MAIN PNB
--- =============================================
-local function pnb()
-    sleep(2000)
-
-    log("Memulai, warp ke " .. CONFIG.world_name .. "...")
-    while not warpToWorld() do
-        log("Mencoba warp lagi...")
-        sleep(3000)
+    while not client:connected() do
+        sleep(1000)
     end
 
-    -- Random posisi awal
-    local pnbX, pnbY = getRandomPnbPos()
-    moveTo(pnbX, pnbY)
-    sleep(1000)
+    sleep(5000)
 
-    local tilePoint = Vector2i.new(pnbX, pnbY + 1)
-    local totalUsed = 0
-    local disconnectCount = 0
-    local cycleCount = 0
-    local randomInterval = math.random(5, 15)
+    client:console():add("[SYSTEM] Reconnected!")
+end
 
-    log("PNB Dimulai | World: " .. CONFIG.world_name)
+-- ==========================================
+-- SECURITY
+-- ==========================================
+local function checkPlayers()
+    local hasStranger = true
+    local oldCollect = client:preferences().collect
+
+    while hasStranger do
+        local world = client:world()
+
+        if not world or not world.players then
+            return
+        end
+
+        hasStranger = false
+
+        for _, player in pairs(world.players) do
+            if player.id ~= client.id then
+
+                local safe = false
+
+                for _, name in pairs(CONFIG.whitelist) do
+                    if string.upper(player.name) == string.upper(name) then
+                        safe = true
+                        break
+                    end
+                end
+
+                if not safe then
+                    hasStranger = true
+
+                    if not client:preferences().collect then
+                        client:preferences().collect = true
+                        client:setStatus(StatusIconType.menu)
+
+                        client:console():add(
+                            "[SECURITY] Stranger detected: " ..
+                            player.name
+                        )
+
+                        sleep(CONFIG.delays.collectSync)
+                    end
+
+                    break
+                end
+            end
+        end
+
+        if hasStranger then
+            sleep(CONFIG.delays.checkPlayer)
+        end
+    end
+
+    if client:preferences().collect ~= oldCollect then
+        client:preferences().collect = oldCollect
+        client:setStatus(StatusIconType.none)
+
+        client:console():add("[SECURITY] Area safe.")
+    end
+end
+
+-- ==========================================
+-- SMART WARP
+-- ==========================================
+local function smartWarp(worldName, portal)
+    local attempts = 0
+    local maxAttempts = 5
+
+    while string.upper(client:navigation()) ~= string.upper(worldName)
+    and attempts < maxAttempts do
+
+        local nav = string.upper(client:navigation())
+
+        if nav ~= string.upper(worldName)
+        and nav ~= "MENU"
+        and nav ~= "" then
+
+            client:leave()
+            sleep(3000)
+        end
+
+        client:console():add(
+            "[WARP] Entering " ..
+            worldName ..
+            " (" ..
+            (attempts + 1) ..
+            "/" ..
+            maxAttempts ..
+            ")"
+        )
+
+        client:warp(worldName .. ":" .. portal)
+
+        sleep(CONFIG.delays.warp)
+
+        attempts = attempts + 1
+    end
+
+    if string.upper(client:navigation()) == string.upper(worldName) then
+        client:console():add("[WARP] Success!")
+        return true
+    end
+
+    client:console():add("[WARP] Failed!")
+
+    client:disconnect()
+
+    waitReconnect()
+
+    return false
+end
+
+-- ==========================================
+-- WALK
+-- ==========================================
+local function walkTo(pos, delayAfter)
+    local attempts = 0
+    local maxRetries = 5
+
+    while attempts < maxRetries do
+        client:findPath(pos)
+
+        local t = 0
+
+        while client:pathfinding() and t < 50 do
+            sleep(CONFIG.delays.pathfinding)
+            t = t + 1
+        end
+
+        local current = client:point()
+
+        if current and current:equals(pos) then
+            if delayAfter then
+                sleep(delayAfter)
+            end
+
+            return true
+        end
+
+        attempts = attempts + 1
+
+        sleep(500)
+    end
+
+    client:console():add("[NAV] Stuck!")
+
+    client:disconnect()
+
+    waitReconnect()
+
+    return false
+end
+
+-- ==========================================
+-- CLEAR PATH
+-- ==========================================
+local function clearPathForCollect()
+    local world = client:world()
+
+    if not world then return end
+
+    for y = CONFIG.pnbBreakStartY, CONFIG.pnbBreakEndY do
+        local pt = Vector2i.new(CONFIG.pnbBreakX, y)
+
+        local t = world:tile(pt)
+
+        while t and t.foreground ~= 0 do
+            client:hit(pt)
+
+            sleep(CONFIG.delays.hit)
+
+            t = world:tile(pt)
+        end
+    end
+end
+
+-- ==========================================
+-- COLLECT
+-- ==========================================
+local function collectDrops(pnbStandPos)
+    client:console():add("[PNB] Collecting...")
+
+    clearPathForCollect()
+
+    if not walkTo(
+        Vector2i.new(CONFIG.pnbBreakX, CONFIG.pnbBreakStartY),
+        CONFIG.delays.collectMove
+    ) then
+        return
+    end
+
+    client:preferences().collect = true
+
+    sleep(CONFIG.delays.collectSync)
+
+    for y = (CONFIG.pnbBreakStartY + 1), CONFIG.pnbBreakEndY do
+        walkTo(
+            Vector2i.new(CONFIG.pnbBreakX, y),
+            CONFIG.delays.collectMove
+        )
+    end
+
+    walkTo(pnbStandPos, CONFIG.delays.returnStand)
+
+    client:preferences().collect = false
+
+    client:console():add("[PNB] Done collect.")
+end
+
+-- ==========================================
+-- DROP SEEDS
+-- ==========================================
+local function dropSeedsIfNeeded()
+    local seeds = getSeedCount()
+
+    if seeds >= CONFIG.maxSeedToDrop then
+        client:console():add(
+            "[STORAGE] Dropping " ..
+            seeds ..
+            " seeds..."
+        )
+
+        client:preferences().collect = false
+
+        if smartWarp(CONFIG.storageWorld, CONFIG.storagePortalId) then
+
+            if walkTo(
+                Vector2i.new(
+                    CONFIG.storageDropX,
+                    CONFIG.storageDropY
+                ),
+                500
+            ) then
+
+                local tries = 0
+
+                while getSeedCount() > 0 and tries < 5 do
+                    local amount = getSeedCount()
+
+                    client:drop(
+                        CONFIG.targetBlockId,
+                        InventoryItemType.seed,
+                        amount
+                    )
+
+                    sleep(1500)
+
+                    tries = tries + 1
+                end
+            end
+        end
+
+        smartWarp(CONFIG.worldName, CONFIG.portalId)
+    end
+end
+
+-- ==========================================
+-- PNB MAIN
+-- ==========================================
+local function doPNB(pnbStandPos)
+    client:console():add("[PNB] Active.")
+
+    if not walkTo(pnbStandPos, CONFIG.delays.returnStand) then
+        return
+    end
+
+    if isTimeToCollect() then
+        collectDrops(pnbStandPos)
+    end
+
+    while getItemCount() > 0 do
+        checkPlayers()
+
+        -- PLACE
+        for y = CONFIG.pnbBreakStartY, CONFIG.pnbBreakEndY do
+            if getItemCount() > 0 then
+
+                local tile = Vector2i.new(CONFIG.pnbBreakX, y)
+
+                if not hasTargetBlock(tile) then
+                    client:place(
+                        tile,
+                        CONFIG.targetBlockId,
+                        CONFIG.itemType
+                    )
+
+                    sleep(CONFIG.delays.place)
+                end
+            end
+        end
+
+        sleep(CONFIG.delays.beforeHit)
+
+        -- HIT
+        for y = CONFIG.pnbBreakStartY, CONFIG.pnbBreakEndY do
+            local tile = Vector2i.new(CONFIG.pnbBreakX, y)
+
+            while hasTargetBlock(tile) do
+                client:hit(tile)
+
+                sleep(CONFIG.delays.hit)
+            end
+        end
+
+        if isTimeToCollect() or getItemCount() == 0 then
+            checkPlayers()
+
+            collectDrops(pnbStandPos)
+
+            if getItemCount() == 0 then
+                break
+            end
+
+            if not walkTo(
+                pnbStandPos,
+                CONFIG.delays.returnStand
+            ) then
+                return
+            end
+        end
+    end
+end
+
+-- ==========================================
+-- MAIN
+-- ==========================================
+runThread(function()
+    client:console():add("[SYSTEM] PNB Started.")
+
+    client:preferences().reconnect = true
+    client:preferences().reconnectInterval = 5000
+
+    client:preferences().collect = false
+
+    if string.upper(client:navigation())
+    ~= string.upper(CONFIG.worldName) then
+
+        if not smartWarp(
+            CONFIG.worldName,
+            CONFIG.portalId
+        ) then
+            sleep(10000)
+        end
+    end
+
+    local pnbStandPos = Vector2i.new(
+        CONFIG.pnbStandX,
+        CONFIG.pnbStandY
+    )
 
     while true do
-        local ok, err = pcall(function()
+        checkPlayers()
 
-            -- Cek koneksi
-            if not isInWorld() then
-                disconnectCount = disconnectCount + 1
-                log("Disconnect #" .. disconnectCount .. " | Reconnect...")
-                autoReconnect()
-                pnbX, pnbY = getRandomPnbPos()
-                moveTo(pnbX, pnbY)
-                sleep(1000)
-                tilePoint = Vector2i.new(pnbX, pnbY + 1)
-                cycleCount = 0
-                randomInterval = math.random(5, 15)
-                return
+        dropSeedsIfNeeded()
+
+        local blocks = getItemCount()
+
+        if blocks > 0 then
+
+            if client:preferences().collect then
+                client:preferences().collect = false
+
+                client:console():add(
+                    "[PNB] Block detected."
+                )
             end
 
-            -- Cek world benar
-            if getWorldName() ~= string.upper(CONFIG.world_name) then
-                log("Bukan di world PNB, warp balik...")
-                warpToWorld()
-                sleep(1000)
-                pnbX, pnbY = getRandomPnbPos()
-                moveTo(pnbX, pnbY)
-                sleep(1000)
-                tilePoint = Vector2i.new(pnbX, pnbY + 1)
-                cycleCount = 0
-                randomInterval = math.random(5, 15)
-                return
+            doPNB(pnbStandPos)
+
+        else
+            local pos = client:point()
+
+            if pos and not pos:equals(pnbStandPos) then
+                walkTo(
+                    pnbStandPos,
+                    CONFIG.delays.returnStand
+                )
             end
 
-            -- Ganti posisi tiap randomInterval siklus
-            cycleCount = cycleCount + 1
-            if cycleCount >= randomInterval then
-                pnbX, pnbY = getRandomPnbPos()
-                moveTo(pnbX, pnbY)
-                sleep(500)
-                tilePoint = Vector2i.new(pnbX, pnbY + 1)
-                cycleCount = 0
-                randomInterval = math.random(5, 15)
-                log("Pindah posisi | Interval berikutnya: " .. randomInterval .. " siklus")
+            if not client:preferences().collect then
+                client:preferences().collect = true
+
+                client:console():add(
+                    "[STATUS] Waiting blocks..."
+                )
             end
 
-            -- Take block ke posisi tetap
-            takeBlocks(pnbX, pnbY)
-
-            if getBlockCount() <= 0 then
-                log("Block tidak tersedia")
-                sleep(2000)
-                return
-            end
-
-            -- Pecah block
-            if hasBlock(tilePoint) then
-                for i = 1, CONFIG.hits do
-                    if not isInWorld() then break end
-                    client:hit(tilePoint)
-                    log("Hit " .. i .. "/" .. CONFIG.hits)
-                    randSleep(CONFIG.hit_delay)
-                end
-
-                if CONFIG.collect then
-                    moveTo(tilePoint.x, tilePoint.y)
-                    randSleep(CONFIG.collect_delay)
-                    client:collect(tilePoint.x, tilePoint.y)
-                    log("Collect drop")
-                    randSleep(CONFIG.collect_delay)
-                    moveTo(pnbX, pnbY)
-                    randSleep(CONFIG.collect_delay)
-                end
-            end
-
-            -- Taruh block
-            local placeOk, placeErr = pcall(function()
-                client:place(tilePoint, CONFIG.itemid, InventoryItemType.block)
-            end)
-
-            if placeOk then
-                totalUsed = totalUsed + 1
-                log("Place #" .. totalUsed ..
-                    " | Y=" .. pnbY ..
-                    " | Block: " .. getBlockCount() ..
-                    " | DC: " .. disconnectCount)
-            else
-                log("Gagal place: " .. tostring(placeErr))
-            end
-
-            randSleep(CONFIG.place_delay)
-
-        end)
-
-        if not ok then
-            log("Error: " .. tostring(err))
-            sleep(1000)
+            sleep(5000)
         end
     end
-end
-
--- =============================================
--- START
--- =============================================
-pnb()
+end)
