@@ -1,110 +1,331 @@
 -- =============================================
--- PNB PIXEL WORLDS
--- AUTO WARP + AUTO RECONNECT + RANDOM TILE
+-- PNB DUAL BOT - 1 SCRIPT
+-- Bot 1: Y=68 X=32 | Bot 2: Y=69 X=32
 -- =============================================
-local client = getClient()
+
+-- Deteksi client otomatis
+local c1, c2
+
+local ok, clients = pcall(function() return getClients() end)
+if ok and clients and clients[1] and clients[2] then
+    c1 = clients[1]
+    c2 = clients[2]
+    print("[SYSTEM] getClients() berhasil")
+else
+    -- Fallback jika getClients() tidak ada
+    local ok1, cl1 = pcall(function() return getClient(0) end)
+    local ok2, cl2 = pcall(function() return getClient(1) end)
+    if ok1 and cl1 then c1 = cl1 end
+    if ok2 and cl2 then c2 = cl2 end
+    print("[SYSTEM] Fallback ke getClient(0) dan getClient(1)")
+end
+
+-- Cek apakah kedua client tersedia
+if not c1 then
+    print("[ERROR] Client 1 tidak ditemukan!")
+    return
+end
+
+if not c2 then
+    print("[SYSTEM] Client 2 tidak ditemukan, jalankan Bot 1 saja")
+end
 
 -- =============================================
 -- CONFIG
 -- =============================================
-local CONFIG = {
-    itemid          = 296,
-    hits            = 5,
-    direction       = "down",
+local BOTS = {}
 
-    world_name      = "pus_mek-",
-    portal_id       = "kemem2",
+BOTS[1] = {
+    name          = "BOT1",
+    client        = c1,
+    itemid        = 296,
+    hits          = 5,
 
-    hit_delay       = { min = 450, max = 690 },
-    place_delay     = { min = 500, max = 900 },
-    collect_delay   = { min = 500, max = 900 },
-    warp_delay      = 5000,
-    reconnect_delay = 8000,
+    hit_delay     = { min = 450, max = 690 },
+    place_delay   = { min = 500, max = 900 },
+    collect_delay = { min = 500, max = 900 },
+    drop_delay    = { min = 900, max = 1500 },
 
-    collect         = true,
-    log             = true,
+    collect       = true,
+    max_stack     = 75,
+    drop_batch    = 30,
+    max_drop_loop = 3,
 
-    -- X TETAP 32, Y RANDOM 68-73
-    pnb_x           = 32,
-    pnb_y_min       = 68,
-    pnb_y_max       = 73,
+    pnb_x  = 32,
+    pnb_y  = 68,
+    drop_x = 32,
+    drop_y = 72,
+    take_x = 32,
+    take_y = 66,
 
-    -- TAKE BLOCK POSISI TETAP
-    take_x          = 32,
-    take_y          = 66,
+    start_delay = 2,
 }
 
+if c2 then
+    BOTS[2] = {
+        name          = "BOT2",
+        client        = c2,
+        itemid        = 296,
+        hits          = 5,
+
+        hit_delay     = { min = 500, max = 750 },
+        place_delay   = { min = 550, max = 950 },
+        collect_delay = { min = 550, max = 950 },
+        drop_delay    = { min = 1000, max = 1600 },
+
+        collect       = true,
+        max_stack     = 75,
+        drop_batch    = 30,
+        max_drop_loop = 3,
+
+        pnb_x  = 32,
+        pnb_y  = 69,
+        drop_x = 32,
+        drop_y = 72,
+        take_x = 32,
+        take_y = 66,
+
+        start_delay = 4,
+    }
+end
+
 -- =============================================
--- LOGGER
+-- FUNGSI UMUM
 -- =============================================
-local function log(msg)
-    if CONFIG.log then
-        print("[PNB] " .. tostring(msg))
-    end
+local function log(name, msg)
+    print("[" .. name .. "] " .. tostring(msg))
 end
 
 local function randSleep(tbl)
     sleep(math.random(tbl.min, tbl.max))
 end
 
--- =============================================
--- CEK WORLD
--- =============================================
-local function isInWorld()
-    local ok, w = pcall(function() return client:world() end)
+local function isInWorld(c)
+    local ok, w = pcall(function() return c:world() end)
     return ok and w ~= nil
 end
 
-local function getWorldName()
-    local ok, w = pcall(function() return client:world() end)
-    if not ok or not w then return "" end
-    local ok2, name = pcall(function() return w:name() end)
-    if not ok2 then return "" end
-    return string.upper(name)
+local function getCount(c, itemid, itemtype)
+    local ok, inv = pcall(function() return c:inventory() end)
+    if not ok or not inv then return 0 end
+    local total = 0
+    for _, item in pairs(inv.items) do
+        if item.id == itemid and item.type == itemtype then
+            total = total + item.amount
+        end
+    end
+    return total
 end
 
--- =============================================
--- AUTO WARP
--- =============================================
-local function warpToWorld()
-    local target = string.upper(CONFIG.world_name)
+local function hasBlock(c, tilePoint)
+    local ok, world = pcall(function() return c:world() end)
+    if not ok or not world then return false end
+    local tile = world:tile(tilePoint)
+    return tile and tile.foreground and tile.foreground > 0
+end
 
-    if getWorldName() == target then
-        log("Sudah di world " .. target)
-        return true
-    end
-
-    log("Warp ke world: " .. target .. " | Portal: " .. CONFIG.portal_id)
-
-    local ok, err = pcall(function()
-        client:warp(CONFIG.world_name, CONFIG.portal_id)
-    end)
-
-    if not ok then
-        log("Gagal warp: " .. tostring(err))
+local function moveTo(cfg, x, y)
+    if not isInWorld(cfg.client) then
+        log(cfg.name, "Tidak di world, skip gerak")
         return false
     end
-
-    sleep(CONFIG.warp_delay)
-
-    if getWorldName() == target then
-        log("Berhasil masuk world " .. target)
-        return true
-    end
-
-    log("Gagal masuk world, coba lagi...")
-    return false
+    cfg.client:setPoint(Vector2i.new(x, y), false)
+    sleep(math.random(600, 900))
+    return true
 end
 
 -- =============================================
--- AUTO RECONNECT
+-- AUTO DROP
 -- =============================================
-local function autoReconnect()
-    log("Koneksi terputus, reconnect...")
+local function autoDrop(cfg)
+    local seedCount = getCount(cfg.client, cfg.itemid, InventoryItemType.seed)
+    if seedCount < cfg.max_stack then return end
 
+    if not isInWorld(cfg.client) then return end
+
+    log(cfg.name, "Drop seed ke Y=" .. cfg.drop_y .. " X=" .. cfg.drop_x)
+    if not moveTo(cfg, cfg.drop_x, cfg.drop_y) then return end
+    sleep(math.random(400, 700))
+
+    local dropped = 0
+    local loopCount = 0
+
+    while loopCount < cfg.max_drop_loop do
+        local current = getCount(cfg.client, cfg.itemid, InventoryItemType.seed)
+        if current < cfg.max_stack then
+            log(cfg.name, "Seed aman: " .. current)
+            break
+        end
+
+        local amount = math.min(cfg.drop_batch, current)
+        local before = current
+
+        local ok, err = pcall(function()
+            cfg.client:drop(cfg.drop_x, cfg.drop_y, cfg.itemid, amount, InventoryItemType.seed)
+        end)
+
+        if not ok then
+            log(cfg.name, "Gagal drop: " .. tostring(err))
+            break
+        end
+
+        loopCount = loopCount + 1
+        dropped = dropped + amount
+        log(cfg.name, "Drop " .. amount .. " | Total: " .. dropped .. " | Loop: " .. loopCount)
+
+        sleep(math.random(1000, 1500))
+
+        local after = getCount(cfg.client, cfg.itemid, InventoryItemType.seed)
+        if after >= before then
+            log(cfg.name, "Seed tidak berkurang, stop")
+            break
+        end
+
+        if not isInWorld(cfg.client) then return end
+        randSleep(cfg.drop_delay)
+    end
+
+    log(cfg.name, "Selesai drop | Kembali PNB")
+    sleep(math.random(400, 600))
+    moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
+end
+
+-- =============================================
+-- AUTO TAKE BLOCK
+-- =============================================
+local function takeBlocks(cfg)
+    if getCount(cfg.client, cfg.itemid, InventoryItemType.block) > 0 then return end
+    if not isInWorld(cfg.client) then return end
+
+    log(cfg.name, "Block habis, ambil dari Y=" .. cfg.take_y)
+    if not moveTo(cfg, cfg.take_x, cfg.take_y) then return end
+
+    cfg.client:collect(cfg.take_x, cfg.take_y)
+    sleep(1500)
+
+    moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
+end
+
+-- =============================================
+-- STATE PER BOT
+-- =============================================
+local states = {}
+
+local function initBot(cfg)
+    states[cfg.name] = {
+        tilePoint  = Vector2i.new(cfg.pnb_x, cfg.pnb_y + 1),
+        totalUsed  = 0,
+        ready      = false,
+        startTime  = os.clock(),
+    }
+    log(cfg.name, "Inisialisasi selesai")
+end
+
+-- =============================================
+-- STEP BOT (1 SIKLUS)
+-- =============================================
+local function stepBot(cfg)
+    local s = states[cfg.name]
+    if not s then return end
+
+    -- Tunggu start delay
+    if not s.ready then
+        if os.clock() - s.startTime >= cfg.start_delay then
+            log(cfg.name, "Mulai! Posisi Y=" .. cfg.pnb_y .. " X=" .. cfg.pnb_x)
+            moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
+            s.ready = true
+        end
+        return
+    end
+
+    -- Proteksi penuh dengan pcall agar tidak berhenti
     local ok, err = pcall(function()
-        client:reconnect()
+
+        if not isInWorld(cfg.client) then
+            log(cfg.name, "Tidak di world...")
+            sleep(2000)
+            return
+        end
+
+        takeBlocks(cfg)
+
+        if getCount(cfg.client, cfg.itemid, InventoryItemType.block) <= 0 then
+            log(cfg.name, "Block kosong")
+            sleep(1000)
+            return
+        end
+
+        if hasBlock(cfg.client, s.tilePoint) then
+            for i = 1, cfg.hits do
+                if not isInWorld(cfg.client) then break end
+                cfg.client:hit(s.tilePoint)
+                log(cfg.name, "Hit " .. i .. "/" .. cfg.hits)
+                randSleep(cfg.hit_delay)
+            end
+
+            if cfg.collect then
+                moveTo(cfg, s.tilePoint.x, s.tilePoint.y)
+                randSleep(cfg.collect_delay)
+                cfg.client:collect(s.tilePoint.x, s.tilePoint.y)
+                log(cfg.name, "Collect")
+                randSleep(cfg.collect_delay)
+                moveTo(cfg, cfg.pnb_x, cfg.pnb_y)
+                randSleep(cfg.collect_delay)
+            end
+        end
+
+        autoDrop(cfg)
+
+        local placeOk, placeErr = pcall(function()
+            cfg.client:place(s.tilePoint, cfg.itemid, InventoryItemType.block)
+        end)
+
+        if placeOk then
+            s.totalUsed = s.totalUsed + 1
+            log(cfg.name, "Place #" .. s.totalUsed ..
+                " | Block: " .. getCount(cfg.client, cfg.itemid, InventoryItemType.block) ..
+                " | Seed: " .. getCount(cfg.client, cfg.itemid, InventoryItemType.seed))
+        else
+            log(cfg.name, "Gagal place: " .. tostring(placeErr))
+        end
+
+        randSleep(cfg.place_delay)
+
     end)
+
+    -- Jika ada error tidak terduga, log dan lanjut
+    if not ok then
+        log(cfg.name, "Error tidak terduga: " .. tostring(err))
+        sleep(1000)
+    end
+end
+
+-- =============================================
+-- START SEMUA BOT
+-- =============================================
+print("[SYSTEM] Inisialisasi bot...")
+
+for _, cfg in ipairs(BOTS) do
+    initBot(cfg)
+end
+
+print("[SYSTEM] Semua bot siap, mulai loop utama")
+
+-- Loop utama tidak akan berhenti
+while true do
+    local allOk, loopErr = pcall(function()
+        for _, cfg in ipairs(BOTS) do
+            stepBot(cfg)
+        end
+    end)
+
+    if not allOk then
+        print("[SYSTEM] Error loop: " .. tostring(loopErr))
+        sleep(1000)
+    end
+
+    sleep(10)
+end    end)
 
     if not ok then
         log("Reconnect gagal: " .. tostring(err))
