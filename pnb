@@ -1,52 +1,29 @@
 -- =============================================
--- PNB PIXEL WORLDS - TANPA AUTO DROP
+--   PNB Script (Place and Break)
+--   by Jane
 -- =============================================
+
 local client = getClient()
 
--- =============================================
--- CONFIG
--- =============================================
+-- ============= CONFIG =============
 local CONFIG = {
     itemid        = 296,
-    spray_id      = 1924,
     hits          = 5,
     direction     = "down",
-
     hit_delay     = { min = 450, max = 690 },
     place_delay   = { min = 500, max = 900 },
-    collect_delay = { min = 500, max = 900 },
-
     collect       = true,
-    log           = true,
-
-    take_offset_x = -2,
-    take_offset_y = 0,
+    collect_delay = { min = 500, max = 900 },
+    log           = true
 }
+-- ==================================
 
--- =============================================
--- LOGGER
--- =============================================
 local function log(msg)
     if CONFIG.log then
         print("[PNB] " .. tostring(msg))
     end
 end
 
-local function randSleep(tbl)
-    sleep(math.random(tbl.min, tbl.max))
-end
-
--- =============================================
--- CEK WORLD
--- =============================================
-local function isInWorld()
-    local ok, w = pcall(function() return client:world() end)
-    return ok and w ~= nil
-end
-
--- =============================================
--- TARGET TILE
--- =============================================
 local function getTargetTile(pos, direction)
     local x, y = pos.x, pos.y
     if direction == "down"  then return Vector2i.new(x, y + 1) end
@@ -56,620 +33,80 @@ local function getTargetTile(pos, direction)
     return Vector2i.new(x, y + 1)
 end
 
--- =============================================
--- HITUNG INVENTORY
--- =============================================
-local function getCount(itemid, itemtype)
-    local ok, inv = pcall(function() return client:inventory() end)
-    if not ok or not inv then return 0 end
+-- Only count blocks, ignore seeds
+local function getCount(itemid)
+    local inv = client:inventory()
     local total = 0
     for _, item in pairs(inv.items) do
-        if item.id == itemid and item.type == itemtype then
+        if item.id == itemid and item.type == InventoryItemType.block then
             total = total + item.amount
         end
     end
     return total
 end
 
-local function getBlockCount()
-    return getCount(CONFIG.itemid, InventoryItemType.block)
-end
-
--- =============================================
--- CEK BLOCK DI TILE
--- =============================================
+-- Check if tile has a foreground block
 local function hasBlock(tilePoint)
-    local ok, world = pcall(function() return client:world() end)
-    if not ok or not world then return false end
+    local world = client:world()
     local tile = world:tile(tilePoint)
-    return tile and tile.foreground and tile.foreground > 0
-end
-
--- =============================================
--- MOVE
--- =============================================
-local function moveTo(x, y)
-    if not isInWorld() then return false end
-    client:setPoint(Vector2i.new(x, y), false)
-    sleep(math.random(600, 900))
-    return true
-end
-
--- =============================================
--- AUTO TAKE BLOCK
--- =============================================
-local function takeBlocks(startPos)
-    if getBlockCount() > 0 then return end
-    if not isInWorld() then return end
-
-    local takeX = startPos.x + CONFIG.take_offset_x
-    local takeY = startPos.y + CONFIG.take_offset_y
-
-    log("Block habis, ambil block baru")
-    if not moveTo(takeX, takeY) then return end
-
-    client:collect(takeX, takeY)
-    sleep(1500)
-
-    log("Kembali ke PNB")
-    moveTo(startPos.x, startPos.y)
-end
-
--- =============================================
--- MAIN PNB
--- =============================================
-local function pnb()
-    sleep(2000)
-
-    local startPos = client:point()
-    local tilePoint = getTargetTile(startPos, CONFIG.direction)
-    local totalUsed = 0
-
-    log("PNB Dimulai")
-
-    while true do
-        local ok, err = pcall(function()
-
-            if not isInWorld() then
-                log("Tidak di world, menunggu...")
-                sleep(2000)
-                return
-            end
-
-            -- Ambil block jika habis
-            takeBlocks(startPos)
-
-            if getBlockCount() <= 0 then
-                log("Block tidak tersedia")
-                sleep(2000)
-                return
-            end
-
-            -- Pecah block jika ada
-            if hasBlock(tilePoint) then
-                for i = 1, CONFIG.hits do
-                    if not isInWorld() then break end
-                    client:hit(tilePoint)
-                    log("Hit " .. i .. "/" .. CONFIG.hits)
-                    randSleep(CONFIG.hit_delay)
-                end
-
-                -- Collect drop
-                if CONFIG.collect then
-                    moveTo(tilePoint.x, tilePoint.y)
-                    randSleep(CONFIG.collect_delay)
-                    client:collect(tilePoint.x, tilePoint.y)
-                    log("Collect drop")
-                    randSleep(CONFIG.collect_delay)
-                    moveTo(startPos.x, startPos.y)
-                    randSleep(CONFIG.collect_delay)
-                end
-            end
-
-            -- Taruh block
-            local placeOk, placeErr = pcall(function()
-                client:place(tilePoint, CONFIG.itemid, InventoryItemType.block)
-            end)
-
-            if placeOk then
-                totalUsed = totalUsed + 1
-                log("Place #" .. totalUsed .. " | Sisa block: " .. getBlockCount())
-            else
-                log("Gagal place: " .. tostring(placeErr))
-            end
-
-            randSleep(CONFIG.place_delay)
-
-        end)
-
-        if not ok then
-            log("Error: " .. tostring(err))
-            sleep(1000)
-        end
-    end
-end
-
--- =============================================
--- START
--- =============================================
-pnb()        "-",
-        "-",
-        "-"
-    },
-    -- =====================================
-
-    delays = {
-        warp = 5000,
-        place = 150,
-        beforeHit = 150,
-        hit = 150,
-
-        collectSync = 1000,
-        collectMove = 1000,
-        returnStand = 1000,
-        checkPlayer = 3000,
-        pathfinding = 150
-    }
-}
-
-local client = getClient()
-
-local function getItemCount()
-    return client:inventory():count(CONFIG.targetBlockId, CONFIG.itemType)
-end
-
-local function getSeedCount()
-    return client:inventory():count(CONFIG.targetBlockId, InventoryItemType.seed)
-end
-
-local function hasTargetBlock(pt)
-    local world = client:world()
-    if not world then return false end
-
-    local tileData = world:tile(pt)
-    if not tileData then return false end
-
-    if CONFIG.itemType == InventoryItemType.block then
-        return tileData.foreground == CONFIG.targetBlockId
-    elseif CONFIG.itemType == InventoryItemType.background then
-        return tileData.background == CONFIG.targetBlockId
-    end
-
-    return false
-end
-
-local function isTimeToCollect()
-    local world = client:world()
-    if not world or not world.collectables then
-        return false
-    end
-
-    local dropCounts = {}
-
-    for _, drop in pairs(world.collectables) do
-        local pt = drop:point()
-
-        if pt.x == CONFIG.pnbBreakX
-        and pt.y >= CONFIG.pnbBreakStartY
-        and pt.y <= CONFIG.pnbBreakEndY then
-
-            local key = pt.x .. "," .. pt.y
-
-            dropCounts[key] = (dropCounts[key] or 0) + drop.amount
-
-            if dropCounts[key] >= 30 then
-                client:console():add("[PNB] Stack detected, collecting...")
-                return true
-            end
-        end
-    end
-
-    return false
-end
-
--- ==========================================
--- RECONNECT
--- ==========================================
-local function waitReconnect()
-    client:console():add("[SYSTEM] Waiting reconnect...")
-
-    while not client:connected() do
-        sleep(1000)
-    end
-
-    sleep(5000)
-
-    client:console():add("[SYSTEM] Reconnected!")
-end
-
--- ==========================================
--- SECURITY
--- ==========================================
-local function checkPlayers()
-    local hasStranger = true
-    local oldCollect = client:preferences().collect
-
-    while hasStranger do
-        local world = client:world()
-
-        if not world or not world.players then
-            return
-        end
-
-        hasStranger = false
-
-        for _, player in pairs(world.players) do
-            if player.id ~= client.id then
-
-                local safe = false
-
-                for _, name in pairs(CONFIG.whitelist) do
-                    if string.upper(player.name) == string.upper(name) then
-                        safe = true
-                        break
-                    end
-                end
-
-                if not safe then
-                    hasStranger = true
-
-                    if not client:preferences().collect then
-                        client:preferences().collect = true
-                        client:setStatus(StatusIconType.menu)
-
-                        client:console():add(
-                            "[SECURITY] Stranger detected: " ..
-                            player.name
-                        )
-
-                        sleep(CONFIG.delays.collectSync)
-                    end
-
-                    break
-                end
-            end
-        end
-
-        if hasStranger then
-            sleep(CONFIG.delays.checkPlayer)
-        end
-    end
-
-    if client:preferences().collect ~= oldCollect then
-        client:preferences().collect = oldCollect
-        client:setStatus(StatusIconType.none)
-
-        client:console():add("[SECURITY] Area safe.")
-    end
-end
-
--- ==========================================
--- SMART WARP
--- ==========================================
-local function smartWarp(worldName, portal)
-    local attempts = 0
-    local maxAttempts = 5
-
-    while string.upper(client:navigation()) ~= string.upper(worldName)
-    and attempts < maxAttempts do
-
-        local nav = string.upper(client:navigation())
-
-        if nav ~= string.upper(worldName)
-        and nav ~= "MENU"
-        and nav ~= "" then
-
-            client:leave()
-            sleep(3000)
-        end
-
-        client:console():add(
-            "[WARP] Entering " ..
-            worldName ..
-            " (" ..
-            (attempts + 1) ..
-            "/" ..
-            maxAttempts ..
-            ")"
-        )
-
-        client:warp(worldName .. ":" .. portal)
-
-        sleep(CONFIG.delays.warp)
-
-        attempts = attempts + 1
-    end
-
-    if string.upper(client:navigation()) == string.upper(worldName) then
-        client:console():add("[WARP] Success!")
+    if tile and tile.foreground and tile.foreground > 0 then
         return true
     end
-
-    client:console():add("[WARP] Failed!")
-
-    client:disconnect()
-
-    waitReconnect()
-
     return false
 end
 
--- ==========================================
--- WALK
--- ==========================================
-local function walkTo(pos, delayAfter)
-    local attempts = 0
-    local maxRetries = 5
+local function pnb(itemid, hits, direction)
+    itemid    = itemid    or CONFIG.itemid
+    hits      = hits      or CONFIG.hits
+    direction = direction or CONFIG.direction
 
-    while attempts < maxRetries do
-        client:findPath(pos)
+    sleep(2000)
+    local startPos  = client:point()
+    local tilePoint = getTargetTile(startPos, direction)
+    local totalUsed = 0
 
-        local t = 0
+    log(string.format("Start PNB | Item: %d | Hits: %d | Direction: %s", itemid, hits, direction))
+    log(string.format("Start pos: (%d,%d) | Target tile: (%d,%d)", startPos.x, startPos.y, tilePoint.x, tilePoint.y))
+    log(string.format("Blocks in inventory: %d", getCount(itemid)))
 
-        while client:pathfinding() and t < 50 do
-            sleep(CONFIG.delays.pathfinding)
-            t = t + 1
-        end
+    while getCount(itemid) > 0 do
 
-        local current = client:point()
-
-        if current and current:equals(pos) then
-            if delayAfter then
-                sleep(delayAfter)
+        if hasBlock(tilePoint) then
+            -- Tile has a block, hit it
+            log("Block detected, hitting...")
+            for i = 1, hits do
+                client:hit(tilePoint)
+                log(string.format("Hit %d/%d tile (%d,%d)", i, hits, tilePoint.x, tilePoint.y))
+                sleep(math.random(CONFIG.hit_delay.min, CONFIG.hit_delay.max))
             end
 
-            return true
-        end
+            if CONFIG.collect then
+                -- Move to tile to collect drops
+                client:setPoint(tilePoint, false)
+                sleep(math.random(CONFIG.collect_delay.min, CONFIG.collect_delay.max))
 
-        attempts = attempts + 1
+                client:collect(tilePoint.x, tilePoint.y)
+                log("Collected drops")
+                sleep(math.random(CONFIG.collect_delay.min, CONFIG.collect_delay.max))
 
-        sleep(500)
-    end
-
-    client:console():add("[NAV] Stuck!")
-
-    client:disconnect()
-
-    waitReconnect()
-
-    return false
-end
-
--- ==========================================
--- CLEAR PATH
--- ==========================================
-local function clearPathForCollect()
-    local world = client:world()
-
-    if not world then return end
-
-    for y = CONFIG.pnbBreakStartY, CONFIG.pnbBreakEndY do
-        local pt = Vector2i.new(CONFIG.pnbBreakX, y)
-
-        local t = world:tile(pt)
-
-        while t and t.foreground ~= 0 do
-            client:hit(pt)
-
-            sleep(CONFIG.delays.hit)
-
-            t = world:tile(pt)
-        end
-    end
-end
-
--- ==========================================
--- COLLECT
--- ==========================================
-local function collectDrops(pnbStandPos)
-    client:console():add("[PNB] Collecting...")
-
-    clearPathForCollect()
-
-    if not walkTo(
-        Vector2i.new(CONFIG.pnbBreakX, CONFIG.pnbBreakStartY),
-        CONFIG.delays.collectMove
-    ) then
-        return
-    end
-
-    client:preferences().collect = true
-
-    sleep(CONFIG.delays.collectSync)
-
-    for y = (CONFIG.pnbBreakStartY + 1), CONFIG.pnbBreakEndY do
-        walkTo(
-            Vector2i.new(CONFIG.pnbBreakX, y),
-            CONFIG.delays.collectMove
-        )
-    end
-
-    walkTo(pnbStandPos, CONFIG.delays.returnStand)
-
-    client:preferences().collect = false
-
-    client:console():add("[PNB] Done collect.")
-end
-
--- ==========================================
--- DROP SEEDS
--- ==========================================
-local function dropSeedsIfNeeded()
-    local seeds = getSeedCount()
-
-    if seeds >= CONFIG.maxSeedToDrop then
-        client:console():add(
-            "[STORAGE] Dropping " ..
-            seeds ..
-            " seeds..."
-        )
-
-        client:preferences().collect = false
-
-        if smartWarp(CONFIG.storageWorld, CONFIG.storagePortalId) then
-
-            if walkTo(
-                Vector2i.new(
-                    CONFIG.storageDropX,
-                    CONFIG.storageDropY
-                ),
-                500
-            ) then
-
-                local tries = 0
-
-                while getSeedCount() > 0 and tries < 5 do
-                    local amount = getSeedCount()
-
-                    client:drop(
-                        CONFIG.targetBlockId,
-                        InventoryItemType.seed,
-                        amount
-                    )
-
-                    sleep(1500)
-
-                    tries = tries + 1
-                end
+                -- Return to start position
+                client:setPoint(startPos, false)
+                sleep(math.random(CONFIG.collect_delay.min, CONFIG.collect_delay.max))
             end
-        end
-
-        smartWarp(CONFIG.worldName, CONFIG.portalId)
-    end
-end
-
--- ==========================================
--- PNB MAIN
--- ==========================================
-local function doPNB(pnbStandPos)
-    client:console():add("[PNB] Active.")
-
-    if not walkTo(pnbStandPos, CONFIG.delays.returnStand) then
-        return
-    end
-
-    if isTimeToCollect() then
-        collectDrops(pnbStandPos)
-    end
-
-    while getItemCount() > 0 do
-        checkPlayers()
-
-        -- PLACE
-        for y = CONFIG.pnbBreakStartY, CONFIG.pnbBreakEndY do
-            if getItemCount() > 0 then
-
-                local tile = Vector2i.new(CONFIG.pnbBreakX, y)
-
-                if not hasTargetBlock(tile) then
-                    client:place(
-                        tile,
-                        CONFIG.targetBlockId,
-                        CONFIG.itemType
-                    )
-
-                    sleep(CONFIG.delays.place)
-                end
-            end
-        end
-
-        sleep(CONFIG.delays.beforeHit)
-
-        -- HIT
-        for y = CONFIG.pnbBreakStartY, CONFIG.pnbBreakEndY do
-            local tile = Vector2i.new(CONFIG.pnbBreakX, y)
-
-            while hasTargetBlock(tile) do
-                client:hit(tile)
-
-                sleep(CONFIG.delays.hit)
-            end
-        end
-
-        if isTimeToCollect() or getItemCount() == 0 then
-            checkPlayers()
-
-            collectDrops(pnbStandPos)
-
-            if getItemCount() == 0 then
-                break
-            end
-
-            if not walkTo(
-                pnbStandPos,
-                CONFIG.delays.returnStand
-            ) then
-                return
-            end
-        end
-    end
-end
-
--- ==========================================
--- MAIN
--- ==========================================
-runThread(function()
-    client:console():add("[SYSTEM] PNB Started.")
-
-    client:preferences().reconnect = true
-    client:preferences().reconnectInterval = 5000
-
-    client:preferences().collect = false
-
-    if string.upper(client:navigation())
-    ~= string.upper(CONFIG.worldName) then
-
-        if not smartWarp(
-            CONFIG.worldName,
-            CONFIG.portalId
-        ) then
-            sleep(10000)
-        end
-    end
-
-    local pnbStandPos = Vector2i.new(
-        CONFIG.pnbStandX,
-        CONFIG.pnbStandY
-    )
-
-    while true do
-        checkPlayers()
-
-        dropSeedsIfNeeded()
-
-        local blocks = getItemCount()
-
-        if blocks > 0 then
-
-            if client:preferences().collect then
-                client:preferences().collect = false
-
-                client:console():add(
-                    "[PNB] Block detected."
-                )
-            end
-
-            doPNB(pnbStandPos)
-
         else
-            local pos = client:point()
-
-            if pos and not pos:equals(pnbStandPos) then
-                walkTo(
-                    pnbStandPos,
-                    CONFIG.delays.returnStand
-                )
-            end
-
-            if not client:preferences().collect then
-                client:preferences().collect = true
-
-                client:console():add(
-                    "[STATUS] Waiting blocks..."
-                )
-            end
-
-            sleep(5000)
+            -- Tile is empty, skip hitting
+            log("Tile empty, skipping hit...")
         end
+
+        -- Place block
+        client:place(tilePoint, itemid, InventoryItemType.block)
+        totalUsed = totalUsed + 1
+        log(string.format("Placed #%d | Remaining: %d", totalUsed, getCount(itemid)))
+
+        sleep(math.random(CONFIG.place_delay.min, CONFIG.place_delay.max))
     end
-end)
+
+    log(string.format("PNB done! Total placed: %d", totalUsed))
+end
+
+pnb(CONFIG.itemid, CONFIG.hits, CONFIG.direction)
