@@ -4,7 +4,7 @@
 -- =========================================================
 -- 0) EDIT WAJIB - CONFIGURATION
 -- =========================================================
-local farm_world = "WORLD:ID"  -- TODO: Edit nama world
+local farm_world = "miya-ko-:krida"  -- TODO: Edit nama world
 
 local SEED_ITEM_ID = 6  -- TODO: Ganti dengan ID seed yang benar
 local INV_SEED_TYPE = InventoryItemType.seed
