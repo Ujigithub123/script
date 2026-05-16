@@ -1,0 +1,728 @@
+-- =========================================================
+-- ADAM PABRIK SCRIPT - CLEAN VERSION
+-- =========================================================
+
+-- =========================================================
+-- 0) KONFIGURASI
+-- =========================================================
+local farm_world = "miya-ko-:krida"
+
+local SEED_ITEM_ID    = 6
+local INV_SEED_TYPE   = InventoryItemType.seed
+local INV_THRESHOLD   = 10
+
+local SAVE_SEED_THRESHOLD_MIN = 50
+local SAVE_SEED_THRESHOLD_MAX = 100
+local SAVE_HALF_ENABLED       = true
+local SEED_STORE_POINT        = Vector2i.new(35, 48)
+
+local PNB_CONFIG = {
+    itemid      = 6,
+    hits        = 4,
+    start_point = Vector2i.new(4, 47),
+    offsets = {
+        Vector2i.new(0,  1),
+        Vector2i.new(-1, 1),
+        Vector2i.new(1,  1),
+        Vector2i.new(-2, 1),
+        Vector2i.new(2,  1),
+    },
+    hit_delay     = { min = 120, max = 200 },
+    place_delay   = { min = 250, max = 350 },
+    collect       = true,
+    collect_delay = { min = 250, max = 320 },
+    log           = true,
+}
+
+local WEBHOOK_URL      = "https://discord.com/api/webhooks/1467420069490458808/jBlPjNam-T3UPsGPstoHF-vqze2C2PihbBFmwxwU-OQQBHk5c1pIh2tzYI7Dcs1P8JJ_"
+local WEBHOOK_INTERVAL = 20
+
+local xMin, xMax  = 39, 45
+local min_y, max_y = 1, 78
+
+local T_MOVE_EXTRA                = 15
+local T_HARVEST_HIT               = 150
+local T_PLACE                     = 100
+local T_PLANT                     = 110
+local T_COLLECT                   = 30
+local T_CYCLE                     = 1500
+local T_RECONNECT_WAIT_AFTER_WARP = 3500
+local T_DISCONNECT_WAIT           = 2000
+
+-- =========================================================
+-- 1) STATE
+-- =========================================================
+local client               = getClient()
+local world                = nil
+local isDisconnected       = false
+local hasWarpedToFarmWorld = false
+local currentAction        = "idle"
+local webhookCycleCounter  = 0
+
+-- =========================================================
+-- 2) LOGGER
+-- =========================================================
+local function log(msg)
+    if PNB_CONFIG.log then
+        print("[BOT] " .. tostring(msg))
+    end
+end
+
+local function safeSetStatus(icon)
+    pcall(function() client:setStatus(icon) end)
+end
+
+-- =========================================================
+-- 3) WORLD & INVENTORY
+-- =========================================================
+local function getWorld()
+    local ok, w = pcall(function() return client:world() end)
+    if ok and w then
+        world = w
+        return w
+    end
+    return nil
+end
+
+local function getSeedCount()
+    local ok, count = pcall(function()
+        return client:inventory():count(SEED_ITEM_ID, INV_SEED_TYPE)
+    end)
+    return ok and count or 0
+end
+
+local function getTargetCount()
+    local ok, count = pcall(function()
+        return client:inventory():count(PNB_CONFIG.itemid, InventoryItemType.block)
+    end)
+    return ok and count or 0
+end
+
+local function totalInvSeedPlusTarget()
+    return getSeedCount() + getTargetCount()
+end
+
+-- =========================================================
+-- 4) WEBHOOK
+-- =========================================================
+local function webhookSend(payload)
+    if not WEBHOOK_URL or WEBHOOK_URL == "" then return end
+    pcall(function()
+        webhook(WEBHOOK_URL, {
+            username = "Adam Pabrik Bot",
+            embeds   = { payload }
+        })
+    end)
+end
+
+local function webhookUpdate()
+    local seedCount   = getSeedCount()
+    local targetCount = getTargetCount()
+    local w           = getWorld()
+    local worldName   = w and w.name or "Unknown"
+    local connected   = client:connected() and "Terhubung" or "Terputus"
+
+    webhookSend({
+        title  = "Adam Pabrik Update",
+        color  = isDisconnected and 16711680 or 65280,
+        fields = {
+            { name = "Status", value = connected,                        inline = true },
+            { name = "World",  value = worldName,                        inline = true },
+            { name = "Benih",  value = tostring(seedCount),              inline = true },
+            { name = "Blok",   value = tostring(targetCount),            inline = true },
+            { name = "Total",  value = tostring(totalInvSeedPlusTarget()), inline = true },
+            { name = "Aksi",   value = string.upper(currentAction),      inline = true },
+        },
+        footer = { text = isDisconnected and "Terputus" or "Berjalan" }
+    })
+end
+
+-- =========================================================
+-- 5) HELPERS
+-- =========================================================
+local function inArea(tile)
+    local ok, p = pcall(function() return tile:point() end)
+    if not ok or not p then return false end
+    return p.x >= xMin and p.x <= xMax and p.y >= min_y and p.y <= max_y
+end
+
+local function goToPoint(pt)
+    if isDisconnected then return false end
+
+    local ok, cp = pcall(function() return client:point() end)
+    if not ok or not cp then return false end
+
+    if cp.x == pt.x and cp.y == pt.y then return true end
+
+    log("Gerak ke (" .. pt.x .. "," .. pt.y .. ")")
+
+    local moved = false
+
+    local ok1 = pcall(function() client:findPath(pt) end)
+    if ok1 then
+        sleep(200)
+        local wait = 0
+        while wait < 100 do
+            local ok2, pf = pcall(function() return client:pathfinding() end)
+            if not ok2 or not pf then break end
+            if isDisconnected then return false end
+            sleep(T_MOVE_EXTRA)
+            wait = wait + 1
+        end
+        moved = true
+    end
+
+    if not moved then
+        pcall(function() client:setPoint(pt, false) end)
+        sleep(300)
+    end
+
+    sleep(100)
+    return true
+end
+
+local function hasBlock(tilePoint)
+    local w = getWorld()
+    if not w then return false end
+    local ok, tile = pcall(function() return w:tile(tilePoint) end)
+    if not ok or not tile then return false end
+    return tile.foreground and tile.foreground > 0
+end
+
+local function collectAtPoint(tilePoint)
+    if not PNB_CONFIG.collect then return end
+    local w = getWorld()
+    if not w then return end
+
+    local ok, collectables = pcall(function() return w.collectables end)
+    if not ok or not collectables then return end
+
+    local count = 0
+    for _, col in pairs(collectables) do
+        if col ~= nil then
+            local ok2, p = pcall(function() return col:point() end)
+            if ok2 and p then
+                local dx = math.abs(p.x - tilePoint.x)
+                local dy = math.abs(p.y - tilePoint.y)
+                if dx <= 1 and dy <= 1 then
+                    pcall(function()
+                        sleep(math.random(
+                            PNB_CONFIG.collect_delay.min,
+                            PNB_CONFIG.collect_delay.max
+                        ))
+                        client:collect(col.id)
+                        count = count + 1
+                        sleep(100)
+                    end)
+                end
+            end
+        end
+    end
+
+    log("Collect: " .. count .. " item")
+    sleep(350)
+end
+
+-- =========================================================
+-- 6) SCAN AREA
+-- =========================================================
+local function scanAreaTiles()
+    local w = getWorld()
+    if not w then return {}, {} end
+
+    local ok, tiles = pcall(function() return w.tiles end)
+    if not ok or not tiles or #tiles == 0 then return {}, {} end
+
+    local harvest = {}
+    local plant   = {}
+
+    for _, tile in pairs(tiles) do
+        pcall(function()
+            if inArea(tile) then
+                local ok2, tree = pcall(function() return tile:tree() end)
+                if ok2 and tree ~= nil then
+                    local ok3, ready = pcall(function() return tree:ready() end)
+                    if ok3 and ready then
+                        table.insert(harvest, tile)
+                    end
+                else
+                    table.insert(plant, tile)
+                end
+            end
+        end)
+    end
+
+    table.sort(harvest, function(a, b)
+        local pa, pb = a:point(), b:point()
+        if pa.y == pb.y then return pa.x < pb.x end
+        return pa.y < pb.y
+    end)
+
+    table.sort(plant, function(a, b)
+        local pa, pb = a:point(), b:point()
+        if pa.y == pb.y then return pa.x < pb.x end
+        return pa.y < pb.y
+    end)
+
+    return harvest, plant
+end
+
+-- =========================================================
+-- 7) HARVEST + PLANT
+-- =========================================================
+local function harvestAndPlantTile(tile)
+    if isDisconnected then return false end
+    currentAction = "harvest_plant"
+
+    if getSeedCount() <= 0 then
+        log("Tidak ada benih, skip harvest")
+        return false
+    end
+
+    local ok0, pt = pcall(function() return tile:point() end)
+    if not ok0 or not pt then return false end
+
+    if not goToPoint(pt) then return false end
+
+    local ok1, tree = pcall(function() return tile:tree() end)
+    if not ok1 or not tree then return false end
+
+    local ok2, ready = pcall(function() return tree:ready() end)
+    if not ok2 or not ready then return false end
+
+    local coord = "(" .. pt.x .. "," .. pt.y .. ")"
+    log("Harvest+Plant di " .. coord)
+
+    for i = 1, 5 do
+        if isDisconnected then return false end
+        pcall(function() client:hit(pt) end)
+        sleep(T_HARVEST_HIT)
+    end
+
+    sleep(1500)
+
+    local ok3 = pcall(function()
+        client:place(pt, SEED_ITEM_ID, INV_SEED_TYPE)
+    end)
+
+    if not ok3 then
+        log("Gagal plant di " .. coord)
+        currentAction = "idle"
+        return false
+    end
+
+    sleep(T_PLACE + 300)
+
+    webhookSend({
+        title       = "Panen + Tanam",
+        description = "Selesai di " .. coord,
+        color       = 16776960
+    })
+
+    log("Selesai harvest+plant di " .. coord)
+    currentAction = "idle"
+    return true
+end
+
+local function plantTile(tile)
+    if isDisconnected then return false end
+    if getSeedCount() <= 0 then return false end
+    currentAction = "plant"
+
+    local ok0, pt = pcall(function() return tile:point() end)
+    if not ok0 or not pt then return false end
+
+    if not goToPoint(pt) then return false end
+
+    local ok1, tree = pcall(function() return tile:tree() end)
+    if ok1 and tree ~= nil then return false end
+
+    local ok2 = pcall(function()
+        client:place(pt, SEED_ITEM_ID, INV_SEED_TYPE)
+    end)
+
+    sleep(T_PLANT + 200)
+    currentAction = "idle"
+    return ok2
+end
+
+-- =========================================================
+-- 8) PNB
+-- =========================================================
+local function pnbPlaceAndBreak()
+    if isDisconnected then return false end
+    currentAction = "pnb"
+
+    local startPos = PNB_CONFIG.start_point
+    if not goToPoint(startPos) then return false end
+
+    log("===== PNB MULAI =====")
+
+    -- Phase 1: Break semua block
+    log("Phase 1: Break semua block")
+    for i, offset in ipairs(PNB_CONFIG.offsets) do
+        if isDisconnected then return false end
+        local target = Vector2i.new(startPos.x + offset.x, startPos.y + offset.y)
+        if hasBlock(target) then
+            for j = 1, PNB_CONFIG.hits do
+                if isDisconnected then return false end
+                pcall(function() client:hit(target) end)
+                sleep(math.random(PNB_CONFIG.hit_delay.min, PNB_CONFIG.hit_delay.max))
+            end
+            log("Break " .. i .. "/" .. #PNB_CONFIG.offsets)
+        else
+            log("Kosong di " .. i .. "/" .. #PNB_CONFIG.offsets .. ", skip")
+        end
+    end
+
+    sleep(1200)
+    sleep(600)
+
+    -- Phase 2: Collect
+    log("Phase 2: Collect semua drop")
+    collectAtPoint(startPos)
+    sleep(150)
+
+    local leftPos  = Vector2i.new(startPos.x - 1, startPos.y + 1)
+    local rightPos = Vector2i.new(startPos.x + 1, startPos.y + 1)
+
+    if goToPoint(leftPos) then
+        collectAtPoint(leftPos)
+        sleep(150)
+    end
+
+    if goToPoint(rightPos) then
+        collectAtPoint(rightPos)
+        sleep(150)
+    end
+
+    sleep(100)
+    if not goToPoint(startPos) then return false end
+    sleep(150)
+
+    -- Phase 3: Place semua block
+    log("Phase 3: Place semua block")
+    for i, offset in ipairs(PNB_CONFIG.offsets) do
+        if isDisconnected then return false end
+        local target = Vector2i.new(startPos.x + offset.x, startPos.y + offset.y)
+        pcall(function()
+            client:place(target, PNB_CONFIG.itemid, InventoryItemType.block)
+        end)
+        sleep(math.random(PNB_CONFIG.place_delay.min, PNB_CONFIG.place_delay.max))
+        log("Place " .. i .. "/" .. #PNB_CONFIG.offsets)
+    end
+
+    log("===== PNB SELESAI =====")
+    currentAction = "idle"
+    return true
+end
+
+-- =========================================================
+-- 9) SAVE SEED
+-- =========================================================
+local function saveSeedIfNeeded()
+    if not SAVE_HALF_ENABLED then return false end
+    if isDisconnected then return false end
+
+    local seedCount = getSeedCount()
+    if seedCount < SAVE_SEED_THRESHOLD_MIN then return false end
+
+    local half = math.floor(seedCount / 2)
+    if half <= 0 then return false end
+
+    currentAction = "drop"
+
+    if not goToPoint(SEED_STORE_POINT) then
+        log("Gagal ke titik simpan")
+        return false
+    end
+
+    sleep(300)
+
+    pcall(function()
+        client:drop(SEED_ITEM_ID, INV_SEED_TYPE, half)
+    end)
+
+    sleep(800)
+
+    local coord = "(" .. SEED_STORE_POINT.x .. "," .. SEED_STORE_POINT.y .. ")"
+    log("Drop " .. half .. " benih di " .. coord)
+
+    webhookSend({
+        title       = "Simpan Benih",
+        description = "Drop " .. half .. " benih di " .. coord,
+        color       = 16711680
+    })
+
+    sleep(500)
+    goToPoint(PNB_CONFIG.start_point)
+
+    currentAction = "idle"
+    return true
+end
+
+-- =========================================================
+-- 10) RECONNECT & WARP
+-- =========================================================
+local function reconnectIfNeeded()
+    local ok, connected = pcall(function() return client:connected() end)
+    if ok and connected then return true end
+
+    log("Reconnect...")
+    pcall(function() client:connect() end)
+
+    for i = 1, 15 do
+        sleep(1000)
+        local ok2, conn2 = pcall(function() return client:connected() end)
+        if ok2 and conn2 then
+            log("Reconnect berhasil")
+            return true
+        end
+        log("Percobaan " .. i .. "/15")
+    end
+
+    log("Reconnect gagal")
+    return false
+end
+
+local function warpToFarmWorld()
+    if isDisconnected then return false end
+
+    local w = getWorld()
+    if not w then
+        sleep(1000)
+        return false
+    end
+
+    local wait = 0
+    while wait < 30 do
+        local ok, tiles = pcall(function() return w.tiles end)
+        if ok and tiles and #tiles > 0 then break end
+        sleep(200)
+        w    = getWorld()
+        wait = wait + 1
+    end
+
+    local ok, worldName = pcall(function() return w.name end)
+    if ok and worldName == farm_world then
+        log("Sudah di " .. farm_world)
+        return true
+    end
+
+    log("Warp ke " .. farm_world)
+    pcall(function() client:warp(farm_world) end)
+    sleep(T_RECONNECT_WAIT_AFTER_WARP + 2000)
+
+    w    = getWorld()
+    wait = 0
+    while wait < 30 do
+        local ok2, tiles = pcall(function() return w.tiles end)
+        if ok2 and tiles and #tiles > 0 then break end
+        sleep(200)
+        w    = getWorld()
+        wait = wait + 1
+    end
+
+    if isDisconnected then return false end
+
+    local moved = goToPoint(PNB_CONFIG.start_point)
+    if not moved then
+        pcall(function() client:setPoint(PNB_CONFIG.start_point, false) end)
+        sleep(500)
+    end
+
+    sleep(500)
+
+    webhookSend({
+        title       = "Warp Berhasil",
+        description = "Teleport ke " .. farm_world,
+        color       = 65280
+    })
+
+    world = nil
+    return true
+end
+
+-- =========================================================
+-- 11) EVENT HANDLER
+-- =========================================================
+client:on("disconnect", function()
+    isDisconnected = true
+    currentAction  = "disconnected"
+    safeSetStatus(StatusIconType.none)
+    log("DISCONNECT!")
+
+    webhookSend({
+        title       = "Bot Terputus",
+        description = "Akan reconnect dalam 3 detik...",
+        color       = 16711680
+    })
+
+    runThread(function()
+        sleep(3000)
+
+        if not client:connected() then
+            pcall(function() client:connect() end)
+            for i = 1, 15 do
+                sleep(1000)
+                local ok, conn = pcall(function() return client:connected() end)
+                if ok and conn then break end
+                log("Reconnect " .. i .. "/15")
+            end
+        end
+
+        local ok, conn = pcall(function() return client:connected() end)
+        if ok and conn then
+            sleep(1000)
+            isDisconnected       = false
+            hasWarpedToFarmWorld = false
+            safeSetStatus(StatusIconType.typing)
+            webhookSend({
+                title       = "Bot Terhubung",
+                description = "Kembali online, warp ke farm world...",
+                color       = 65280
+            })
+        else
+            log("Reconnect gagal, butuh intervensi manual")
+            webhookSend({
+                title       = "Reconnect Gagal",
+                description = "Butuh intervensi manual!",
+                color       = 16711680
+            })
+        end
+    end)
+end)
+
+client:on("connect", function()
+    isDisconnected = false
+    currentAction  = "connected"
+    safeSetStatus(StatusIconType.typing)
+    log("Terhubung!")
+end)
+
+-- =========================================================
+-- 12) MAIN LOOP
+-- =========================================================
+runThread(function()
+    sleep(1000)
+    log("===== BOT DIMULAI =====")
+
+    local ok, conn = pcall(function() return client:connected() end)
+    if not ok or not conn then
+        reconnectIfNeeded()
+    end
+
+    if not hasWarpedToFarmWorld then
+        log("Warp pertama ke farm world...")
+        if warpToFarmWorld() then
+            hasWarpedToFarmWorld = true
+            log("Warp pertama berhasil")
+        else
+            log("Warp pertama gagal")
+        end
+    end
+
+    webhookSend({
+        title       = "Bot Mulai",
+        description = "Farming dimulai di " .. farm_world,
+        color       = 65280,
+        fields      = {
+            { name = "Start",  value = "(" .. PNB_CONFIG.start_point.x .. "," .. PNB_CONFIG.start_point.y .. ")", inline = true },
+            { name = "Simpan", value = "(" .. SEED_STORE_POINT.x .. "," .. SEED_STORE_POINT.y .. ")",             inline = true },
+        }
+    })
+
+    while true do
+        local loopOk, loopErr = pcall(function()
+
+            if isDisconnected then
+                currentAction = "disconnected"
+                sleep(T_DISCONNECT_WAIT)
+                return
+            end
+
+            if not hasWarpedToFarmWorld then
+                log("Retry warp...")
+                if warpToFarmWorld() then
+                    hasWarpedToFarmWorld = true
+                end
+                sleep(2000)
+                return
+            end
+
+            local seedCount   = getSeedCount()
+            local targetCount = getTargetCount()
+
+            local harvestTiles, plantTiles = scanAreaTiles()
+
+            log(string.format(
+                "Benih:%d Blok:%d | Panen:%d Tanam:%d",
+                seedCount, targetCount, #harvestTiles, #plantTiles
+            ))
+
+            -- Prioritas 1: PNB
+            if targetCount >= 1 then
+                log("PNB triggered! Blok: " .. targetCount)
+
+                while getTargetCount() > 0 do
+                    if isDisconnected then break end
+                    local before = getTargetCount()
+                    pnbPlaceAndBreak()
+                    sleep(500)
+                    local after = getTargetCount()
+                    if after >= before then
+                        log("Block tidak berkurang, stop PNB")
+                        break
+                    end
+                end
+
+                log("PNB selesai")
+
+            -- Prioritas 2: Save seed jika terlalu banyak
+            elseif seedCount > SAVE_SEED_THRESHOLD_MAX and SAVE_HALF_ENABLED then
+                log("Seed melebihi " .. SAVE_SEED_THRESHOLD_MAX .. ", simpan...")
+                saveSeedIfNeeded()
+                sleep(1000)
+
+            -- Prioritas 3: Harvest + plant
+            elseif #harvestTiles > 0 then
+                log("Harvest " .. #harvestTiles .. " tile")
+                for _, tile in ipairs(harvestTiles) do
+                    if isDisconnected then break end
+                    harvestAndPlantTile(tile)
+                    sleep(100)
+                end
+                sleep(500)
+
+            -- Prioritas 4: Plant tile kosong
+            elseif seedCount > 0 and #plantTiles > 0 then
+                log("Plant " .. #plantTiles .. " tile")
+                for _, tile in ipairs(plantTiles) do
+                    if isDisconnected then break end
+                    if getSeedCount() <= 0 then break end
+                    plantTile(tile)
+                    sleep(100)
+                end
+                sleep(500)
+
+            -- Prioritas 5: Simpan seed
+            else
+                saveSeedIfNeeded()
+            end
+
+            webhookCycleCounter = webhookCycleCounter + 1
+            if webhookCycleCounter >= WEBHOOK_INTERVAL then
+                webhookUpdate()
+                webhookCycleCounter = 0
+            end
+
+            sleep(T_CYCLE)
+
+        end)
+
+        if not loopOk then
+            log("Error di main loop: " .. tostring(loopErr))
+            sleep(2000)
+        end
+    end
+end)
