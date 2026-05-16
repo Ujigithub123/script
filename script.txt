@@ -15,7 +15,7 @@ local INV_THRESHOLD = 10  -- Trigger PNB ketika total seed+block >= 10
 local SAVE_SEED_THRESHOLD_MIN = 50
 local SAVE_SEED_THRESHOLD_MAX = 100
 local SAVE_HALF_ENABLED = true
-local SEED_STORE_POINT = Vector2i.new(17, 46)  -- TODO: Koordinat tempat drop seed
+local SEED_STORE_POINT = Vector2i.new(35, 48)  -- TODO: Koordinat tempat drop seed
 
 -- PNB (Place & Break) Configuration
 local PNB_CONFIG = {
